@@ -1,0 +1,21 @@
+dataset:
+  raw_images_dir: "data/images"
+  raw_masks_dir: "data/labels"
+  output_dir: "runs/sample_yolo_out"
+  image_extensions: [".jpg", ".jpeg", ".png"]
+  mask_suffix: "_train_id.png"
+  mask_extension: null
+  link_images: false
+
+polygon:
+  road_class_id: 0
+  min_area_px: 25.0
+  approx_epsilon_ratio: 0.001
+
+dataloader:
+  splits_to_inspect: ["train", "val"]
+  batch_size: 5
+  imgsz: 640
+  workers: 0
+  max_batches: 1
+  save_dir: "runs/sample_dataloader_vis"

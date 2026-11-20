@@ -1,0 +1,24 @@
+# Python & Jupyter
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.ipynb_checkpoints/
+.pytest_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Raw data, converted YOLO datasets & Ultralytics runs
+data/
+runs/
+sample_yolo_test/
+*.pt
+*.pth
+*.onnx
+
+# OS / editor clutter
+.DS_Store
+Thumbs.db
