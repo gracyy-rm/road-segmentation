@@ -58,44 +58,104 @@ def render_batch_overlays(
     save_dir: Path,
     prefix: str,
 ) -> list[Path]:
-    """Render polygon/mask overlays from a YOLO dataloader batch and save images."""
+    """Render ground-truth segmentation overlays and save images."""
+
     save_dir.mkdir(parents=True, exist_ok=True)
+
     imgs = batch["img"]
     batch_idx = batch.get("batch_idx")
     cls = batch.get("cls")
-    masks = batch.get("masks")  # Present when polygon/mask targets are collated by Ultralytics
+    masks = batch.get("masks")
 
     saved_paths: list[Path] = []
     num_items = imgs.shape[0]
+
+    # Move indexing information to CPU
+    if batch_idx is not None:
+        batch_idx = batch_idx.detach().cpu().reshape(-1)
+
+    if cls is not None:
+        cls = cls.detach().cpu().reshape(-1)
+
+    num_instances = len(batch_idx) if batch_idx is not None else 0
 
     for i in range(num_items):
         canvas = _denormalize_image(imgs[i])
         h, w = canvas.shape[:2]
 
+        # Count polygons belonging to the current image
         sample_cls_count = 0
+
         if batch_idx is not None and cls is not None:
-            sample_mask = (batch_idx == i).detach().cpu().numpy().reshape(-1)
-            sample_cls = cls.detach().cpu().numpy().reshape(-1)[sample_mask]
-            sample_cls_count = int(len(sample_cls))
+            sample_cls_count = int((batch_idx == i).sum().item())
 
         if masks is not None:
-            # masks shape in Ultralytics batches is typically (N_instances, H, W)
-            m_batch_idx = batch.get("batch_idx")
-            if m_batch_idx is not None:
-                sel = (m_batch_idx == i).detach().cpu().numpy().reshape(-1)
-                sample_masks = masks[sel].detach().cpu().numpy()
-                if sample_masks.size > 0:
-                    combined = np.clip(np.sum(sample_masks, axis=0), 0, 1).astype(np.uint8)
-                    if combined.shape != (h, w):
-                        combined = cv2.resize(combined, (w, h), interpolation=cv2.INTER_NEAREST)
-                    overlay = canvas.copy()
-                    overlay[combined > 0] = (0, 200, 0)  # green road tint
-                    canvas = cv2.addWeighted(overlay, 0.4, canvas, 0.6, 0)
+            masks = masks.detach().cpu()
 
-                    contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    cv2.drawContours(canvas, contours, -1, (0, 255, 0), 2)
+            if masks.ndim != 3:
+                raise ValueError(
+                    f"Expected masks with 3 dimensions, got {masks.shape}"
+                )
 
+            # Case 1: Overlap masks - one mask per image
+            if masks.shape[0] == num_items and masks.shape[0] != num_instances:
+                combined = (masks[i] > 0).numpy().astype(np.uint8)
+
+            # Case 2: Individual masks - one mask per instance
+            elif masks.shape[0] == num_instances:
+                if batch_idx is not None:
+                    sel = batch_idx == i
+                    sample_masks = masks[sel]
+
+                    if sample_masks.shape[0] > 0:
+                        combined = sample_masks.gt(0).any(dim=0).numpy().astype(np.uint8)
+                    else:
+                        combined = np.zeros(masks.shape[1:], dtype=np.uint8)
+                else:
+                    combined = np.zeros(masks.shape[1:], dtype=np.uint8)
+
+            else:
+                raise ValueError(
+                    f"Cannot associate masks with images. "
+                    f"Mask count: {masks.shape[0]}, "
+                    f"batch size: {num_items}, "
+                    f"instance count: {num_instances}"
+                )
+
+            # Resize mask to original batch image dimensions
+            if combined.shape != (h, w):
+                combined = cv2.resize(
+                    combined,
+                    (w, h),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+
+            # Draw road overlay
+            if combined.any():
+                overlay = canvas.copy()
+                overlay[combined > 0] = (0, 200, 0)
+
+                canvas = cv2.addWeighted(
+                    overlay, 0.4, canvas, 0.6, 0
+                )
+
+                contours, _ = cv2.findContours(
+                    combined,
+                    cv2.RETR_EXTERNAL,
+                    cv2.CHAIN_APPROX_SIMPLE,
+                )
+
+                cv2.drawContours(
+                    canvas,
+                    contours,
+                    -1,
+                    (0, 255, 0),
+                    2,
+                )
+
+        # Add image information
         label_text = f"{prefix} | idx={i} | road_polys={sample_cls_count}"
+
         cv2.putText(
             canvas,
             label_text,
@@ -107,6 +167,7 @@ def render_batch_overlays(
             cv2.LINE_AA,
         )
 
+        # Save visualization
         out_path = save_dir / f"{prefix}_sample_{i:02d}.png"
         cv2.imwrite(str(out_path), canvas)
         saved_paths.append(out_path)
